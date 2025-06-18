@@ -5,6 +5,7 @@ import com.shelfex.job_tracker.model.JobApplication;
 import com.shelfex.job_tracker.model.User;
 import com.shelfex.job_tracker.repository.JobApplicationRepository;
 import com.shelfex.job_tracker.repository.UserRepository;
+import com.shelfex.job_tracker.service.EmailService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -23,7 +24,10 @@ public class JobApplicationController {
     @Autowired
     private UserRepository userRepo;
 
-    // Helper methods to map between DTO and Entity
+    @Autowired
+    private EmailService emailService;
+
+    // Helper methods
     private JobApplicationDTO toDTO(JobApplication job) {
         return JobApplicationDTO.builder()
                 .id(job.getId())
@@ -48,20 +52,20 @@ public class JobApplicationController {
                 .build();
     }
 
-    // Get all jobs for the authenticated user
     @GetMapping
     public ResponseEntity<?> getUserJobs(Authentication authentication) {
         String email = authentication.getName();
         User user = userRepo.findByEmail(email).orElse(null);
         if (user == null) return ResponseEntity.badRequest().body("User not found");
+
         List<JobApplicationDTO> jobs = jobRepo.findByUser(user)
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+
         return ResponseEntity.ok(jobs);
     }
 
-    // Add a new job
     @PostMapping
     public ResponseEntity<?> addJob(@RequestBody JobApplicationDTO jobDTO, Authentication authentication) {
         String email = authentication.getName();
@@ -69,7 +73,14 @@ public class JobApplicationController {
         if (user == null) return ResponseEntity.badRequest().body("User not found");
 
         JobApplication job = toEntity(jobDTO, user);
-        return ResponseEntity.ok(toDTO(jobRepo.save(job)));
+        JobApplication saved = jobRepo.save(job);
+
+        // ✅ Send email after add
+        String subject = "📥 New Job Application Added";
+        String body = "Hi " + user.getName() + ",\n\nYou have successfully added the job application for: " + job.getPosition() + " at " + job.getCompany() + ".";
+        emailService.sendEmail(user.getEmail(), subject, body);
+
+        return ResponseEntity.ok(toDTO(saved));
     }
 
     @PutMapping("/{id}")
@@ -83,12 +94,21 @@ public class JobApplicationController {
                     if (!job.getUser().getId().equals(user.getId())) {
                         return ResponseEntity.status(403).body("Unauthorized");
                     }
+
                     job.setCompany(jobDTO.getCompany());
                     job.setPosition(jobDTO.getPosition());
                     job.setStatus(jobDTO.getStatus());
                     job.setAppliedDate(jobDTO.getAppliedDate());
                     job.setNotes(jobDTO.getNotes());
-                    return ResponseEntity.ok(toDTO(jobRepo.save(job)));
+
+                    JobApplication updated = jobRepo.save(job);
+
+                    // 🛠 Send email after update
+                    String subject = "🛠 Job Application Updated";
+                    String body = "Hi " + user.getName() + ",\n\nYour job application for \"" + job.getPosition() + "\" at " + job.getCompany() + " has been updated.";
+                    emailService.sendEmail(user.getEmail(), subject, body);
+
+                    return ResponseEntity.ok(toDTO(updated));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -104,6 +124,12 @@ public class JobApplicationController {
                     if (!job.getUser().getId().equals(user.getId())) {
                         return ResponseEntity.status(403).body("Unauthorized");
                     }
+
+                    // ❌ Send email before delete
+                    String subject = "❌ Job Application Deleted";
+                    String body = "Hi " + user.getName() + ",\n\nYour job application for \"" + job.getPosition() + "\" at " + job.getCompany() + " has been deleted.";
+                    emailService.sendEmail(user.getEmail(), subject, body);
+
                     jobRepo.delete(job);
                     return ResponseEntity.ok("Job deleted successfully");
                 })
